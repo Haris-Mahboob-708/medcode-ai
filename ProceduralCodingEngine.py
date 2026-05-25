@@ -87,16 +87,16 @@ class ProceduralCodingEngine:
 
         # Direct HCPCS Level II extraction
         for raw_code in self.HCPCS_PATTERN.findall(text):
-            code = raw_code.upper()
-            if self._is_valid_hcpcs_level_ii(code):
-                desc = self.HCPCS_REFERENCE.get(code, "HCPCS Level II procedure/supply/service")
+            hcpcs_code = raw_code.upper()
+            if self._is_valid_hcpcs_level_ii(hcpcs_code):
+                desc = self.HCPCS_REFERENCE.get(hcpcs_code, "HCPCS Level II procedure/supply/service")
                 units = self._calculate_hcpcs_units(text, desc)
                 self._push(
                     procedures,
                     seen,
                     Procedure(
                         type="HCPCS_Level_II",
-                        code=code,
+                        code=hcpcs_code,
                         description=desc,
                         units=units,
                         suggested_modifiers=self._suggested_modifiers(lowered),
@@ -154,7 +154,7 @@ class ProceduralCodingEngine:
         if not code.isdigit() or len(code) != 5:
             return False
         numeric = int(code)
-        return 100 <= numeric <= 99499
+        return 100 <= numeric <= 99999
 
     def _is_valid_hcpcs_level_ii(self, code: str) -> bool:
         return bool(re.fullmatch(r"[A-Z]\d{4}", code)) and code[0] in self.HCPCS_ALLOWED_PREFIXES
@@ -231,14 +231,14 @@ class ProceduralCodingEngine:
         return None
 
     def _suggested_modifiers(self, lowered: str) -> List[str]:
-        right = "right" in lowered
-        left = "left" in lowered
-        bilateral = "bilateral" in lowered or (right and left)
+        has_right_modifier = bool(re.search(r"\bright\b", lowered))
+        has_left_modifier = bool(re.search(r"\bleft\b", lowered))
+        bilateral = "bilateral" in lowered or (has_right_modifier and has_left_modifier)
         if bilateral:
             return ["50"]
-        if right:
+        if has_right_modifier:
             return ["RT"]
-        if left:
+        if has_left_modifier:
             return ["LT"]
         return []
 
