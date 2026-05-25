@@ -56,7 +56,7 @@ class AppLogicTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = _load_app_module()
 
-    def test_match_codes_groups_types_and_sorts_confidence_desc(self):
+    def test_match_codes_groups_by_type(self):
         note = (
             "Established patient follow-up for type 2 diabetes mellitus with hyperglycemia. "
             "HbA1c and comprehensive metabolic panel ordered."
@@ -67,14 +67,22 @@ class AppLogicTests(unittest.TestCase):
         self.assertTrue(all(code["type"] == "icd10" for code in icd10))
         self.assertTrue(all(code["type"] == "cpt" for code in cpt))
         self.assertTrue(all(code["type"] == "hcpcs" for code in hcpcs))
-        self.assertEqual(
-            [code["confidence"] for code in icd10],
-            sorted((code["confidence"] for code in icd10), reverse=True),
-        )
         self.assertIn("E11.9", {code["code"] for code in icd10})
         self.assertIn("E11.65", {code["code"] for code in icd10})
         self.assertIn("83036", {code["code"] for code in cpt})
         self.assertIn("80053", {code["code"] for code in cpt})
+
+    def test_match_codes_sorts_by_confidence_descending(self):
+        note = (
+            "Established patient follow-up for type 2 diabetes mellitus with hyperglycemia. "
+            "HbA1c and comprehensive metabolic panel ordered."
+        )
+        icd10, _, _ = self.app.match_codes(note)
+
+        self.assertEqual(
+            [code["confidence"] for code in icd10],
+            sorted((code["confidence"] for code in icd10), reverse=True),
+        )
 
     def test_match_codes_enforces_minimum_confidence_floor(self):
         baseline_db = self.app.DB
@@ -150,7 +158,6 @@ class AppLogicTests(unittest.TestCase):
 
         self.assertIn("Date:", letter)
         self.assertIn("codes for assignment: E11.65, I10", letter)
-        self.assertIn("E11.65, I10", letter)
         self.assertIn("• E11.65 – Provider must document hyperglycemia explicitly.", letter)
         self.assertIn("• 99214 – Document MDM elements clearly.", letter)
         self.assertNotIn("• I10 –", letter)
