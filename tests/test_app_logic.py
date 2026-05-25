@@ -77,15 +77,27 @@ class AppLogicTests(unittest.TestCase):
         self.assertIn("80053", {code["code"] for code in cpt})
 
     def test_match_codes_enforces_minimum_confidence_floor(self):
-        note = "Patient has dysuria."
-        icd10, cpt, hcpcs = self.app.match_codes(note)
-        all_hits = icd10 + cpt + hcpcs
+        baseline_db = self.app.DB
+        custom_entry = {
+            "type": "icd10",
+            "code": "T00.00",
+            "desc": "Synthetic test entry",
+            "keys": ["trigger"] + [f"miss-{i}" for i in range(40)],
+            "note": "test",
+            "seq": "test",
+            "comp": "test",
+            "risk": "low",
+            "category": "Synthetic",
+        }
+        self.app.DB = [custom_entry]
+        try:
+            icd10, cpt, hcpcs = self.app.match_codes("trigger")
+        finally:
+            self.app.DB = baseline_db
 
-        self.assertTrue(all_hits)
-        self.assertEqual(
-            min(code["confidence"] for code in all_hits),
-            20,
-        )
+        all_hits = icd10 + cpt + hcpcs
+        self.assertEqual(len(all_hits), 1)
+        self.assertEqual(all_hits[0]["confidence"], 20)
 
     def test_conf_html_maps_thresholds_to_expected_labels_and_classes(self):
         high_html = self.app.conf_html(70)
