@@ -18,11 +18,13 @@ class TestMedCodeValidatorPipeline(unittest.TestCase):
         result = pipeline.run(payload)
 
         confirmed_codes = {item["code"] for item in result["confirmed_diagnoses"]}
-        excluded_concepts = {item["concept"].lower() for item in result["negated_or_excluded_concepts"]}
+        excluded_concepts = [item["concept"] for item in result["negated_or_excluded_concepts"]]
 
         self.assertIn("K21.9", confirmed_codes)
         self.assertNotIn("I21.19", confirmed_codes)
-        self.assertIn("acute myocardial infarction", excluded_concepts)
+        self.assertTrue(
+            any(concept.lower() == "acute myocardial infarction" for concept in excluded_concepts)
+        )
 
 
 if __name__ == "__main__":

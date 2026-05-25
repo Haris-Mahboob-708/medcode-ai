@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 
 @dataclass(frozen=True)
@@ -245,7 +245,7 @@ class MedCodeValidatorPipeline:
         confirmed: Sequence[ExtractedConcept],
     ) -> Tuple[List[ExtractedConcept], List[Dict[str, str]]]:
         definitive_codes = {c.code for c in confirmed if not c.is_symptom}
-        implied_symptoms: set[str] = set()
+        implied_symptoms: Set[str] = set()
         for code in definitive_codes:
             implied_symptoms.update(self._IMPLICIT_SYMPTOM_MAP.get(code, ()))
 
@@ -332,7 +332,7 @@ class MedCodeValidatorPipeline:
         return sorted(by_code.values(), key=lambda c: (-c.section_weight, c.code))
 
     def _dedupe_excluded(self, excluded: Sequence[Dict[str, str]]) -> List[Dict[str, str]]:
-        seen: set[Tuple[str, str]] = set()
+        seen: Set[Tuple[str, str]] = set()
         result: List[Dict[str, str]] = []
         for item in excluded:
             key = (item["concept"].lower(), item["reason"])
