@@ -23,7 +23,6 @@ class SectionBlock:
     name: str
     text: str
     weight: int
-    is_discharge_priority: bool
 
 
 @dataclass
@@ -88,6 +87,8 @@ class MedCodeValidatorPipeline:
         "K21.9": ("R07.9", "R06.02"),
         "I21.19": ("R07.9", "R06.02"),
     }
+    _NEGATION_FORWARD_SCOPE_CHARS = 80
+    _NEGATION_BACKWARD_SCOPE_CHARS = 25
 
     def __init__(
         self,
@@ -153,12 +154,11 @@ class MedCodeValidatorPipeline:
     def _parse_sections(self, text: str) -> List[SectionBlock]:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
-            return [SectionBlock(name="clinical_note", text=text, weight=1, is_discharge_priority=False)]
+            return [SectionBlock(name="clinical_note", text=text, weight=1)]
 
         blocks: List[SectionBlock] = []
         current_name = "clinical_note"
         current_weight = 1
-        current_priority = False
         current_text_parts: List[str] = []
 
         for line in lines:
@@ -170,12 +170,10 @@ class MedCodeValidatorPipeline:
                             name=current_name,
                             text=" ".join(current_text_parts),
                             weight=current_weight,
-                            is_discharge_priority=current_priority,
                         )
                     )
                 current_name = detected_name
                 current_weight = detected_weight
-                current_priority = detected_weight >= 10
                 headerless_line = re.sub(r"^[A-Za-z\s/]+:\s*", "", line).strip()
                 current_text_parts = [headerless_line] if headerless_line else []
             else:
@@ -187,11 +185,10 @@ class MedCodeValidatorPipeline:
                     name=current_name,
                     text=" ".join(current_text_parts),
                     weight=current_weight,
-                    is_discharge_priority=current_priority,
                 )
             )
 
-        return blocks or [SectionBlock(name="clinical_note", text=text, weight=1, is_discharge_priority=False)]
+        return blocks or [SectionBlock(name="clinical_note", text=text, weight=1)]
 
     def _match_header(self, line: str) -> Tuple[Optional[str], int]:
         lowered = line.lower()
@@ -285,9 +282,10 @@ class MedCodeValidatorPipeline:
             doc = self._nlp(candidate.evidence)
             for token in doc:
                 if token.text.lower() in candidate.concept.lower().split():
-                    if any(child.dep_ == "neg" for child in token.children):
-                        return True, "Dependency negation modifier detected by spaCy parser."
-                    if token.dep_ == "neg":
+                    has_dependency_negation = token.dep_ == "neg" or any(
+                        child.dep_ == "neg" for child in token.children
+                    )
+                    if has_dependency_negation:
                         return True, "Dependency negation modifier detected by spaCy parser."
 
         return False, ""
@@ -302,9 +300,9 @@ class MedCodeValidatorPipeline:
             term_pos = sentence.find(term)
             if term_pos < 0:
                 continue
-            if 0 <= term_pos - trigger_pos <= 80:
+            if 0 <= term_pos - trigger_pos <= self._NEGATION_FORWARD_SCOPE_CHARS:
                 return True
-            if 0 <= trigger_pos - term_pos <= 25:
+            if 0 <= trigger_pos - term_pos <= self._NEGATION_BACKWARD_SCOPE_CHARS:
                 return True
         return False
 
@@ -315,7 +313,11 @@ class MedCodeValidatorPipeline:
         return None
 
     def _best_evidence_sentence(self, text: str, keywords: Iterable[str]) -> str:
-        sentences = re.split(r"(?<=[.!?])\s+", text)
+        if self._nlp is not None:
+            doc = self._nlp(text)
+            sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+        else:
+            sentences = re.split(r"(?<=[.!?])\s+", text)
         lowered_keywords = tuple(k.lower() for k in keywords)
         for sentence in sentences:
             lowered = sentence.lower()
@@ -361,6 +363,8 @@ class MedCodeValidatorPipeline:
             import spacy  # type: ignore
 
             try:
+                # Keep parser active for dependency-based negation detection;
+                # disable unrelated heavy components to reduce runtime overhead.
                 return spacy.load("en_core_web_sm", disable=["ner", "lemmatizer", "textcat"])
             except Exception:
                 blank = spacy.blank("en")
