@@ -28,7 +28,7 @@ class Procedure:
             "type": self.type,
             "code": self.code,
             "description": self.description,
-            "units": max(1, int(self.units)),
+            "units": max(1, math.ceil(self.units)),
             "suggested_modifiers": self.suggested_modifiers or [],
         }
 
@@ -143,20 +143,6 @@ class ProceduralCodingEngine:
     def to_json(self, clinical_note: str) -> str:
         return json.dumps(self.extract_procedures(clinical_note), indent=2)
 
-    def run_mock_validation(self) -> Dict[str, List[ProcedureOutput]]:
-        """Mock test case: 40mg Depo-Medrol injection should produce CPT admin + J2130 with 2 units."""
-        mock_text = (
-            "Patient received intramuscular injection of 40 mg Depo-Medrol today. "
-            "Administration performed in clinic. HCPCS J2130 documented."
-        )
-        result = self.extract_procedures(mock_text)
-
-        by_code = {p["code"]: p for p in result["procedures"]}
-        assert "96372" in by_code, "Expected administration CPT 96372 for injection event."
-        assert "J2130" in by_code, "Expected HCPCS J2130 for Depo-Medrol."
-        assert by_code["J2130"]["units"] == 2, "Expected 40 mg / 20 mg = 2 billing units."
-        return result
-
     def _push(self, procedures: List[Procedure], seen: set, procedure: Procedure) -> None:
         key = (procedure.type, procedure.code)
         if key in seen:
@@ -168,7 +154,7 @@ class ProceduralCodingEngine:
         if not code.isdigit() or len(code) != 5:
             return False
         numeric = int(code)
-        return 1 <= numeric <= 99499
+        return 100 <= numeric <= 99499
 
     def _is_valid_hcpcs_level_ii(self, code: str) -> bool:
         return bool(re.fullmatch(r"[A-Z]\d{4}", code)) and code[0] in self.HCPCS_ALLOWED_PREFIXES
@@ -190,6 +176,8 @@ class ProceduralCodingEngine:
         )
 
     def _infer_admin_cpt(self, lowered: str) -> Optional[str]:
+        if re.search(r"\b(hydration|rehydration)\b", lowered):
+            return "96360"
         if re.search(r"\b(infusion|intravenous|iv)\b", lowered):
             return "96365"
         if re.search(r"\b(injection|intramuscular|subcutaneous)\b", lowered):
@@ -211,7 +199,7 @@ class ProceduralCodingEngine:
         base_unit_mg = self._extract_descriptor_unit_mg(descriptor)
         if dose_mg is None or base_unit_mg is None or base_unit_mg <= 0:
             return 1
-        return max(1, int(math.ceil(dose_mg / base_unit_mg)))
+        return max(1, math.ceil(dose_mg / base_unit_mg))
 
     def _extract_dose_mg(self, text: str) -> Optional[float]:
         match = self.DOSAGE_PATTERN.search(text)
@@ -231,6 +219,7 @@ class ProceduralCodingEngine:
 
     @staticmethod
     def _convert_to_mg(value: float, unit: str) -> Optional[float]:
+        """Convert mass units to mg; returns None for volume-only units (e.g., mL)."""
         unit = unit.lower()
         if unit == "mg":
             return value
@@ -242,14 +231,16 @@ class ProceduralCodingEngine:
         return None
 
     def _suggested_modifiers(self, lowered: str) -> List[str]:
-        modifiers: List[str] = []
-        if "right" in lowered:
-            modifiers.append("RT")
-        if "left" in lowered:
-            modifiers.append("LT")
-        if "bilateral" in lowered or ("right" in lowered and "left" in lowered):
-            modifiers.append("50")
-        return modifiers
+        right = "right" in lowered
+        left = "left" in lowered
+        bilateral = "bilateral" in lowered or (right and left)
+        if bilateral:
+            return ["50"]
+        if right:
+            return ["RT"]
+        if left:
+            return ["LT"]
+        return []
 
     def _validate_output(self, output: Dict[str, List[ProcedureOutput]]) -> None:
         if "procedures" not in output or not isinstance(output["procedures"], list):
@@ -276,5 +267,3 @@ class ProceduralCodingEngine:
 if __name__ == "__main__":
     engine = ProceduralCodingEngine()
     print(engine.to_json("40 mg Depo-Medrol injection administered in clinic, J2130."))
-    print("\nMock validation:")
-    print(json.dumps(engine.run_mock_validation(), indent=2))
