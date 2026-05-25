@@ -136,7 +136,7 @@ class AppLogicTests(unittest.TestCase):
         letter = self.app.generate_query_letter([], [], "snippet")
         self.assertEqual(letter, "")
 
-    def test_generate_query_letter_includes_only_medium_high_risk_issues(self):
+    def test_generate_query_letter_lists_all_icd_codes_but_limits_issue_bullets_to_medium_high_risk(self):
         icd10_codes = [
             {"code": "E11.65", "risk": "high", "comp": "Provider must document hyperglycemia explicitly."},
             {"code": "I10", "risk": "low", "comp": "Document BP readings and medication compliance."},
@@ -150,6 +150,7 @@ class AppLogicTests(unittest.TestCase):
 
         self.assertIn("Date:", letter)
         self.assertIn("codes for assignment: E11.65, I10", letter)
+        self.assertIn("E11.65, I10", letter)
         self.assertIn("• E11.65 – Provider must document hyperglycemia explicitly.", letter)
         self.assertIn("• 99214 – Document MDM elements clearly.", letter)
         self.assertNotIn("• I10 –", letter)
