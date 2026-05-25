@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import re
 from datetime import datetime
 
 # ── Page Config ────────────────────────────────────────────────────────────────
@@ -522,19 +523,123 @@ SAMPLES = {
 }
 
 # ── Matching Engine ─────────────────────────────────────────────────────────────
+SECTION_PRIORITY_WEIGHTS = {
+    "high": 2.5,
+    "default": 1.0,
+    "low": 0.5,
+}
+
+HIGH_PRIORITY_SECTIONS = (
+    "assessment",
+    "plan",
+    "assessment/plan",
+    "a/p",
+    "discharge disposition",
+    "final diagnosis",
+    "diagnosis",
+)
+
+LOW_PRIORITY_SECTIONS = (
+    "chief complaint",
+    "cc",
+    "emergency dept workup",
+    "emergency department workup",
+    "ed workup",
+    "ed evaluation",
+)
+
+NEGATION_PRE_RE = re.compile(
+    r"(?:\b(?:no|denies?|without|negative for|free of|absence of|rule out|ruled out|r/o|excluded)\b(?:\W+\w+){0,7}\W*)$",
+    flags=re.IGNORECASE,
+)
+NEGATION_POST_RE = re.compile(
+    r"^(?:\W*\w+){0,5}\W*(?:ruled out|rule out|excluded|not confirmed|not present)\b",
+    flags=re.IGNORECASE,
+)
+SECTION_HEADER_RE = re.compile(r"^\s*([A-Za-z][A-Za-z /&\-\(\)]{2,80})\s*:\s*(.*)$")
+
+def section_priority_weight(section_name: str) -> float:
+    name = (section_name or "").strip().lower()
+    if any(tag in name for tag in HIGH_PRIORITY_SECTIONS):
+        return SECTION_PRIORITY_WEIGHTS["high"]
+    if any(tag in name for tag in LOW_PRIORITY_SECTIONS):
+        return SECTION_PRIORITY_WEIGHTS["low"]
+    return SECTION_PRIORITY_WEIGHTS["default"]
+
+def split_note_sections(note: str):
+    sections = []
+    current_name = "default"
+    current_lines = []
+
+    for line in note.splitlines():
+        m = SECTION_HEADER_RE.match(line)
+        if m:
+            if current_lines:
+                sections.append((current_name, "\n".join(current_lines).strip()))
+            current_name = m.group(1).strip().lower()
+            initial_content = m.group(2).strip()
+            current_lines = [initial_content] if initial_content else []
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        sections.append((current_name, "\n".join(current_lines).strip()))
+
+    if not sections:
+        return [("default", note)]
+    return sections
+
+def is_negated_span(text: str, start: int, end: int) -> bool:
+    pre_window = text[max(0, start - 100):start]
+    post_window = text[end:end + 50]
+    return bool(NEGATION_PRE_RE.search(pre_window) or NEGATION_POST_RE.search(post_window))
+
+def keyword_has_non_negated_match(text: str, keyword: str) -> bool:
+    pattern = re.compile(rf"\b{re.escape(keyword)}\b", flags=re.IGNORECASE)
+    for match in pattern.finditer(text):
+        if not is_negated_span(text, match.start(), match.end()):
+            return True
+    return False
+
 def match_codes(note: str):
-    n = note.lower()
+    sections = split_note_sections(note)
     seen, hits = set(), []
     for entry in DB:
         if entry["code"] in seen:
             continue
-        score = sum(1 for k in entry["keys"] if k.lower() in n)
-        if score > 0:
-            pct = min(100, int((score / len(entry["keys"])) * 250))
+        weighted_score = 0.0
+        raw_score = 0
+        max_section_weight = 0.0
+
+        for section_name, section_text in sections:
+            section_weight = section_priority_weight(section_name)
+            section_hits = 0
+            for key in entry["keys"]:
+                if keyword_has_non_negated_match(section_text, key):
+                    section_hits += 1
+            if section_hits:
+                raw_score += section_hits
+                weighted_score += section_hits * section_weight
+                max_section_weight = max(max_section_weight, section_weight)
+
+        if weighted_score > 0:
+            pct = min(100, int((weighted_score / len(entry["keys"])) * 180))
             pct = max(20, pct)
-            hits.append({**entry, "score": score, "confidence": pct})
+            hits.append({
+                **entry,
+                "score": raw_score,
+                "weighted_score": weighted_score,
+                "section_weight": max_section_weight,
+                "confidence": pct
+            })
             seen.add(entry["code"])
-    hits.sort(key=lambda x: -x["confidence"])
+    hits.sort(
+        key=lambda x: (
+            -x["section_weight"],
+            -x["confidence"],
+            -x["weighted_score"],
+        )
+    )
     return (
         [h for h in hits if h["type"] == "icd10"],
         [h for h in hits if h["type"] == "cpt"],
