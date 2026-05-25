@@ -548,15 +548,36 @@ LOW_PRIORITY_SECTIONS = (
     "ed evaluation",
 )
 
-NEGATION_PRE_RE = re.compile(
-    r"(?:\b(?:no|denies?|without|negative for|free of|absence of|rule out|ruled out|r/o|excluded)\b(?:\W+\w+){0,7}\W*)$",
-    flags=re.IGNORECASE,
+NEGATION_PRE_WINDOW_CHARS = 100
+NEGATION_POST_WINDOW_CHARS = 50
+NEGATION_PRE_WINDOW_TOKENS = 6
+NEGATION_POST_WINDOW_TOKENS = 5
+# Calibrated to keep weighted confidence comparable to the pre-weighting scale.
+CONFIDENCE_SCALE_FACTOR = 180
+SECTION_HEADER_ALLOWED_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ /&-()")
+TOKEN_PATTERN = re.compile(r"[a-z0-9/\-]+")
+KEYWORD_PATTERN_CACHE = {}
+
+NEGATION_PRE_TRIGGERS = (
+    ("no",),
+    ("denies",),
+    ("deny",),
+    ("without",),
+    ("negative", "for"),
+    ("free", "of"),
+    ("absence", "of"),
+    ("rule", "out"),
+    ("ruled", "out"),
+    ("r/o",),
+    ("excluded",),
 )
-NEGATION_POST_RE = re.compile(
-    r"^(?:\W*\w+){0,5}\W*(?:ruled out|rule out|excluded|not confirmed|not present)\b",
-    flags=re.IGNORECASE,
+NEGATION_POST_TRIGGERS = (
+    ("ruled", "out"),
+    ("rule", "out"),
+    ("excluded",),
+    ("not", "confirmed"),
+    ("not", "present"),
 )
-SECTION_HEADER_RE = re.compile(r"^\s*([A-Za-z][A-Za-z /&\-\(\)]{2,80})\s*:\s*(.*)$")
 
 def section_priority_weight(section_name: str) -> float:
     name = (section_name or "").strip().lower()
@@ -566,18 +587,29 @@ def section_priority_weight(section_name: str) -> float:
         return SECTION_PRIORITY_WEIGHTS["low"]
     return SECTION_PRIORITY_WEIGHTS["default"]
 
+def parse_section_header(line: str):
+    stripped = line.strip()
+    if ":" not in stripped:
+        return None
+    header, remainder = stripped.split(":", 1)
+    header = header.strip()
+    if len(header) < 3 or len(header) > 80 or not header[0].isalpha():
+        return None
+    if any(ch not in SECTION_HEADER_ALLOWED_CHARS for ch in header):
+        return None
+    return header.lower(), remainder.strip()
+
 def split_note_sections(note: str):
     sections = []
     current_name = "default"
     current_lines = []
 
     for line in note.splitlines():
-        m = SECTION_HEADER_RE.match(line)
-        if m:
+        parsed_header = parse_section_header(line)
+        if parsed_header:
             if current_lines:
                 sections.append((current_name, "\n".join(current_lines).strip()))
-            current_name = m.group(1).strip().lower()
-            initial_content = m.group(2).strip()
+            current_name, initial_content = parsed_header
             current_lines = [initial_content] if initial_content else []
         else:
             current_lines.append(line)
@@ -589,13 +621,28 @@ def split_note_sections(note: str):
         return [("default", note)]
     return sections
 
+def contains_trigger(tokens, triggers) -> bool:
+    for trigger in triggers:
+        trigger_len = len(trigger)
+        for idx in range(0, len(tokens) - trigger_len + 1):
+            if tuple(tokens[idx:idx + trigger_len]) == trigger:
+                return True
+    return False
+
 def is_negated_span(text: str, start: int, end: int) -> bool:
-    pre_window = text[max(0, start - 100):start]
-    post_window = text[end:end + 50]
-    return bool(NEGATION_PRE_RE.search(pre_window) or NEGATION_POST_RE.search(post_window))
+    pre_window = text[max(0, start - NEGATION_PRE_WINDOW_CHARS):start].lower()
+    post_window = text[end:end + NEGATION_POST_WINDOW_CHARS].lower()
+
+    pre_tokens = TOKEN_PATTERN.findall(pre_window)[-NEGATION_PRE_WINDOW_TOKENS:]
+    post_tokens = TOKEN_PATTERN.findall(post_window)[:NEGATION_POST_WINDOW_TOKENS]
+
+    return contains_trigger(pre_tokens, NEGATION_PRE_TRIGGERS) or contains_trigger(post_tokens, NEGATION_POST_TRIGGERS)
 
 def keyword_has_non_negated_match(text: str, keyword: str) -> bool:
-    pattern = re.compile(rf"\b{re.escape(keyword)}\b", flags=re.IGNORECASE)
+    pattern = KEYWORD_PATTERN_CACHE.get(keyword)
+    if pattern is None:
+        pattern = re.compile(rf"\b{re.escape(keyword)}\b", flags=re.IGNORECASE)
+        KEYWORD_PATTERN_CACHE[keyword] = pattern
     for match in pattern.finditer(text):
         if not is_negated_span(text, match.start(), match.end()):
             return True
@@ -623,7 +670,7 @@ def match_codes(note: str):
                 max_section_weight = max(max_section_weight, section_weight)
 
         if weighted_score > 0:
-            pct = min(100, int((weighted_score / len(entry["keys"])) * 180))
+            pct = min(100, int((weighted_score / len(entry["keys"])) * CONFIDENCE_SCALE_FACTOR))
             pct = max(20, pct)
             hits.append({
                 **entry,
@@ -636,8 +683,8 @@ def match_codes(note: str):
     hits.sort(
         key=lambda x: (
             -x["section_weight"],
-            -x["confidence"],
             -x["weighted_score"],
+            -x["confidence"],
         )
     )
     return (
