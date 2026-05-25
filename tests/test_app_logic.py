@@ -3,6 +3,9 @@ import sys
 import types
 import unittest
 
+NUM_MISSES_FOR_MINIMUM_CONFIDENCE = 40
+MINIMUM_CONFIDENCE = 20
+
 
 class _SessionState(dict):
     def __getattr__(self, key):
@@ -90,7 +93,7 @@ class AppLogicTests(unittest.TestCase):
             "type": "icd10",
             "code": "T00.00",
             "desc": "Synthetic test entry",
-            "keys": ["trigger"] + [f"miss-{i}" for i in range(40)],
+            "keys": ["trigger"] + [f"miss-{i}" for i in range(NUM_MISSES_FOR_MINIMUM_CONFIDENCE)],
             "note": "test",
             "seq": "test",
             "comp": "test",
@@ -105,7 +108,7 @@ class AppLogicTests(unittest.TestCase):
 
         all_hits = icd10 + cpt + hcpcs
         self.assertEqual(len(all_hits), 1)
-        self.assertEqual(all_hits[0]["confidence"], 20)
+        self.assertEqual(all_hits[0]["confidence"], MINIMUM_CONFIDENCE)
 
     def test_conf_html_maps_thresholds_to_expected_labels_and_classes(self):
         high_html = self.app.conf_html(70)
